@@ -1,9 +1,9 @@
-using System.Text.Json;
 using Azure.Messaging.ServiceBus;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.Logging;
 using UsagePulse.Contracts;
 using UsagePulse.Processing.Abstractions;
+using UsagePulse.Serialization;
 
 namespace UsagePulse.Functions.Functions;
 
@@ -27,24 +27,24 @@ public sealed class UsageProcessingFunction
         UsageEvent? usageEvent;
         try
         {
-            usageEvent = JsonSerializer.Deserialize<UsageEvent>(message.Body.ToString());
+            usageEvent = UsageEventJsonSerializer.Deserialize(message.Body.ToString());
         }
-        catch (JsonException ex)
+        catch (Exception ex)
         {
-            await messageActions.DeadLetterMessageAsync(message, deadLetterReason: "InvalidPayload", deadLetterErrorDescription: ex.Message, cancellationToken: cancellationToken);
+            await messageActions.DeadLetterMessageAsync(message, deadLetterReason: DeadLetterReasonCode.InvalidPayload.ToString(), deadLetterErrorDescription: ex.Message, cancellationToken: cancellationToken);
             return;
         }
 
         if (usageEvent is null)
         {
-            await messageActions.DeadLetterMessageAsync(message, deadLetterReason: "NullPayload", deadLetterErrorDescription: "Payload deserialized to null.", cancellationToken: cancellationToken);
+            await messageActions.DeadLetterMessageAsync(message, deadLetterReason: DeadLetterReasonCode.NullPayload.ToString(), deadLetterErrorDescription: "Payload deserialized to null.", cancellationToken: cancellationToken);
             return;
         }
 
         var result = await processor.ProcessAsync(usageEvent, cancellationToken);
         if (!result.IsSuccess)
         {
-            logger.LogError("Event {EventId} failed after {Attempts} attempts. Message moved to application dead-letter queue.", usageEvent.EventId, result.Attempts);
+            logger.LogError("Processing failed for event {EventId}. Attempts={Attempts} ReasonCode={ReasonCode} Message={FailureMessage}", usageEvent.EventId, result.Attempts, result.Failure?.ReasonCode, result.Failure?.Message);
         }
 
         await messageActions.CompleteMessageAsync(message, cancellationToken);

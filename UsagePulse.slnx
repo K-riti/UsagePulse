@@ -4,8 +4,10 @@
     <Project Path="src/UsagePulse.Functions/UsagePulse.Functions.csproj" />
     <Project Path="src/UsagePulse.Processing/UsagePulse.Processing.csproj" />
     <Project Path="src/UsagePulse.QueryApi/UsagePulse.QueryApi.csproj" />
+    <Project Path="src/UsagePulse.Serialization/UsagePulse.Serialization.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/UsagePulse.Architecture.Tests/UsagePulse.Architecture.Tests.csproj" />
     <Project Path="tests/UsagePulse.Processing.Tests/UsagePulse.Processing.Tests.csproj" />
   </Folder>
 </Solution>

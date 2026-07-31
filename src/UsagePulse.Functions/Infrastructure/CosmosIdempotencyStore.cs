@@ -1,5 +1,6 @@
 using Microsoft.Azure.Cosmos;
 using UsagePulse.Functions.Configuration;
+using UsagePulse.Functions.StorageModels;
 using UsagePulse.Processing.Abstractions;
 
 namespace UsagePulse.Functions.Infrastructure;
@@ -22,8 +23,14 @@ public sealed class CosmosIdempotencyStore : IIdempotencyStore
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
-            var item = new IdempotencyRecord(eventId, "started", DateTimeOffset.UtcNow);
-            await container.CreateItemAsync(item, new PartitionKey(item.id), cancellationToken: cancellationToken);
+            var item = new IdempotencyRecord
+            {
+                Id = eventId,
+                Status = "started",
+                ProcessedAt = DateTimeOffset.UtcNow
+            };
+
+            await container.CreateItemAsync(item, new PartitionKey(item.Id), cancellationToken: cancellationToken);
             return true;
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Conflict)
@@ -34,9 +41,13 @@ public sealed class CosmosIdempotencyStore : IIdempotencyStore
 
     public async Task MarkProcessedAsync(string eventId, CancellationToken cancellationToken)
     {
-        var item = new IdempotencyRecord(eventId, "processed", DateTimeOffset.UtcNow);
-        await container.UpsertItemAsync(item, new PartitionKey(item.id), cancellationToken: cancellationToken);
-    }
+        var item = new IdempotencyRecord
+        {
+            Id = eventId,
+            Status = "processed",
+            ProcessedAt = DateTimeOffset.UtcNow
+        };
 
-    private sealed record IdempotencyRecord(string id, string status, DateTimeOffset processedAt);
+        await container.UpsertItemAsync(item, new PartitionKey(item.Id), cancellationToken: cancellationToken);
+    }
 }

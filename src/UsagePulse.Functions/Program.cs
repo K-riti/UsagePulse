@@ -7,35 +7,50 @@ using Microsoft.Azure.Functions.Worker.Builder;
 using Microsoft.Azure.Functions.Worker.OpenTelemetry;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
+using OpenTelemetry;
 using UsagePulse.Functions.Configuration;
 using UsagePulse.Functions.Infrastructure;
+using UsagePulse.Processing;
 using UsagePulse.Processing.Abstractions;
 using UsagePulse.Processing.Options;
-using UsagePulse.Processing.Services;
-using OpenTelemetry;
 
 var builder = FunctionsApplication.CreateBuilder(args);
 
 builder.ConfigureFunctionsWebApplication();
 
-builder.Services.Configure<UsagePulseSettings>(builder.Configuration.GetSection("UsagePulse"));
-builder.Services.Configure<UsagePulsePipelineOptions>(builder.Configuration.GetSection("UsagePulse"));
-builder.Services.AddSingleton(sp => UsagePulseSettingsLoader.Load(sp));
-builder.Services.AddSingleton<IUsageEventProcessor, UsageEventProcessor>();
+builder.Services.AddOptions<UsagePulseSettings>()
+    .Bind(builder.Configuration.GetSection("UsagePulse"))
+    .ValidateDataAnnotations()
+    .Validate(settings =>
+            !string.IsNullOrWhiteSpace(settings.ServiceBusConnectionString) || !string.IsNullOrWhiteSpace(settings.ServiceBusNamespace),
+        "Either ServiceBusConnectionString or ServiceBusNamespace must be configured.")
+    .Validate(settings =>
+            !string.IsNullOrWhiteSpace(settings.CosmosConnectionString) || !string.IsNullOrWhiteSpace(settings.CosmosEndpoint),
+        "Either CosmosConnectionString or CosmosEndpoint must be configured.")
+    .ValidateOnStart();
+
+builder.Services.AddOptions<UsagePulsePipelineOptions>()
+    .Bind(builder.Configuration.GetSection("UsagePulse"))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<UsagePulseSettings>>().Value);
+builder.Services.AddUsagePulseProcessing();
 builder.Services.AddHttpClient();
 
 builder.Services.AddSingleton<ServiceBusClient>(sp =>
 {
-    var settings = UsagePulseSettingsLoader.Load(sp);
-    return settings.ServiceBusConnectionString is { Length: > 0 }
+    var settings = sp.GetRequiredService<IOptions<UsagePulseSettings>>().Value;
+    return !string.IsNullOrWhiteSpace(settings.ServiceBusConnectionString)
         ? new ServiceBusClient(settings.ServiceBusConnectionString)
         : new ServiceBusClient(settings.ServiceBusNamespace, new DefaultAzureCredential());
 });
 
 builder.Services.AddSingleton<CosmosClient>(sp =>
 {
-    var settings = UsagePulseSettingsLoader.Load(sp);
-    return settings.CosmosConnectionString is { Length: > 0 }
+    var settings = sp.GetRequiredService<IOptions<UsagePulseSettings>>().Value;
+    return !string.IsNullOrWhiteSpace(settings.CosmosConnectionString)
         ? new CosmosClient(settings.CosmosConnectionString)
         : new CosmosClient(settings.CosmosEndpoint, new DefaultAzureCredential());
 });

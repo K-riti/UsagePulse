@@ -1,15 +1,14 @@
 using System.Net.Http.Json;
-using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using UsagePulse.Contracts;
 using UsagePulse.Functions.Configuration;
 using UsagePulse.Processing.Abstractions;
+using UsagePulse.Serialization;
 
 namespace UsagePulse.Functions.Infrastructure;
 
 public sealed class KustoUsageAnalyticsSink : IUsageAnalyticsSink
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
     private readonly IHttpClientFactory httpClientFactory;
     private readonly UsagePulseSettings settings;
     private readonly ILogger<KustoUsageAnalyticsSink> logger;
@@ -33,7 +32,7 @@ public sealed class KustoUsageAnalyticsSink : IUsageAnalyticsSink
         }
 
         var client = httpClientFactory.CreateClient(nameof(KustoUsageAnalyticsSink));
-        using var response = await client.PostAsJsonAsync(settings.KustoIngestionEndpoint, usageEvent, SerializerOptions, cancellationToken);
+        using var response = await client.PostAsJsonAsync(settings.KustoIngestionEndpoint, usageEvent, UsagePulseJsonDefaults.Options, cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 }

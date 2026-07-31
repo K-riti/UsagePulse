@@ -1,9 +1,9 @@
-using System.Text.Json;
 using Azure.Messaging.ServiceBus;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.Logging;
 using UsagePulse.Contracts;
 using UsagePulse.Functions.Configuration;
+using UsagePulse.Serialization;
 
 namespace UsagePulse.Functions.Functions;
 
@@ -31,11 +31,11 @@ public sealed class UsageIngestionFunction : IAsyncDisposable
             UsageEvent? usageEvent;
             try
             {
-                usageEvent = JsonSerializer.Deserialize<UsageEvent>(raw);
+                usageEvent = UsageEventJsonSerializer.Deserialize(raw);
             }
-            catch (JsonException ex)
+            catch (Exception ex)
             {
-                logger.LogWarning(ex, "Skipping invalid event payload.");
+                logger.LogWarning(ex, "Skipping invalid event payload in ingestion stage.");
                 continue;
             }
 
@@ -44,7 +44,7 @@ public sealed class UsageIngestionFunction : IAsyncDisposable
                 continue;
             }
 
-            var message = new ServiceBusMessage(JsonSerializer.Serialize(usageEvent))
+            var message = new ServiceBusMessage(UsageEventJsonSerializer.Serialize(usageEvent))
             {
                 MessageId = usageEvent.EventId,
                 Subject = "usage-event",

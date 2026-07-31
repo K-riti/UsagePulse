@@ -1,110 +1,142 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Polly;
+using Polly.CircuitBreaker;
+using Polly.Retry;
 using UsagePulse.Contracts;
 using UsagePulse.Processing.Abstractions;
 using UsagePulse.Processing.Options;
+using UsagePulse.Processing.Services.Pipeline;
 
 namespace UsagePulse.Processing.Services;
 
 public sealed class UsageEventProcessor : IUsageEventProcessor
 {
-    private readonly IIdempotencyStore idempotencyStore;
-    private readonly IUsageEventRepository usageEventRepository;
-    private readonly IUsageAnalyticsSink analyticsSink;
+    private readonly IUsageEventValidationStage validationStage;
+    private readonly IUsageEventDeduplicationStage deduplicationStage;
+    private readonly IUsageEventPersistenceStage persistenceStage;
+    private readonly IUsageEventAnalyticsStage analyticsStage;
+    private readonly IUsageEventFinalizeStage finalizeStage;
     private readonly IDeadLetterSink deadLetterSink;
-    private readonly UsagePulsePipelineOptions options;
     private readonly ILogger<UsageEventProcessor> logger;
+    private readonly ResiliencePipeline resiliencePipeline;
 
     public UsageEventProcessor(
-        IIdempotencyStore idempotencyStore,
-        IUsageEventRepository usageEventRepository,
-        IUsageAnalyticsSink analyticsSink,
+        IUsageEventValidationStage validationStage,
+        IUsageEventDeduplicationStage deduplicationStage,
+        IUsageEventPersistenceStage persistenceStage,
+        IUsageEventAnalyticsStage analyticsStage,
+        IUsageEventFinalizeStage finalizeStage,
         IDeadLetterSink deadLetterSink,
-        Microsoft.Extensions.Options.IOptions<UsagePulsePipelineOptions> options,
+        IOptions<UsagePulsePipelineOptions> options,
         ILogger<UsageEventProcessor> logger)
     {
-        this.idempotencyStore = idempotencyStore;
-        this.usageEventRepository = usageEventRepository;
-        this.analyticsSink = analyticsSink;
+        this.validationStage = validationStage;
+        this.deduplicationStage = deduplicationStage;
+        this.persistenceStage = persistenceStage;
+        this.analyticsStage = analyticsStage;
+        this.finalizeStage = finalizeStage;
         this.deadLetterSink = deadLetterSink;
-        this.options = options.Value;
         this.logger = logger;
+        resiliencePipeline = CreatePipeline(options.Value, logger);
     }
 
     public async Task<ProcessingResult> ProcessAsync(UsageEvent usageEvent, CancellationToken cancellationToken)
     {
-        if (!TryValidate(usageEvent, out var validationError))
+        using var activity = StartActivity(usageEvent);
+
+        var validation = validationStage.Validate(usageEvent);
+        if (!validation.IsValid)
         {
-            logger.LogWarning("Rejected invalid usage event {EventId}: {Reason}", usageEvent.EventId, validationError);
-            await deadLetterSink.PublishAsync(usageEvent, validationError, cancellationToken);
-            return ProcessingResult.Failure(0, validationError);
+            var failure = validation.Failure ?? new ProcessingFailure(DeadLetterReasonCode.ValidationFailed, "Validation failed.");
+            logger.LogWarning("Rejected event {EventId}. ReasonCode={ReasonCode} ValidationCode={ValidationCode} Message={Message}", usageEvent.EventId, failure.ReasonCode, failure.ValidationCode, failure.Message);
+            await deadLetterSink.PublishAsync(usageEvent, failure, cancellationToken);
+            RecordMetric(usageEvent, "validation_failed", failure.ReasonCode);
+            return ProcessingResult.Failure(0, failure.ReasonCode, failure.Message, failure.ValidationCode);
         }
 
-        if (!await idempotencyStore.TryStartProcessingAsync(usageEvent.EventId, cancellationToken))
+        if (!await deduplicationStage.TryStartAsync(usageEvent, cancellationToken))
         {
-            logger.LogInformation("Usage event {EventId} is already processed.", usageEvent.EventId);
+            logger.LogInformation("Skipped duplicate event {EventId} for tenant {TenantId}.", usageEvent.EventId, usageEvent.TenantId);
+            RecordMetric(usageEvent, "duplicate", null);
             return ProcessingResult.Duplicate();
         }
 
-        var maxAttempts = Math.Max(1, options.MaxProcessingAttempts);
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        var attempts = 0;
+        try
         {
-            try
+            await resiliencePipeline.ExecuteAsync(async ct =>
             {
-                await usageEventRepository.StoreAsync(usageEvent, cancellationToken);
-                await analyticsSink.WriteAsync(usageEvent, cancellationToken);
-                await idempotencyStore.MarkProcessedAsync(usageEvent.EventId, cancellationToken);
-                return ProcessingResult.Success(attempt);
-            }
-            catch (Exception ex) when (attempt < maxAttempts)
-            {
-                var delay = TimeSpan.FromMilliseconds(Math.Pow(2, attempt - 1) * options.BaseRetryDelayMs);
-                logger.LogWarning(ex, "Failed processing event {EventId} attempt {Attempt}. Retrying in {Delay}.", usageEvent.EventId, attempt, delay);
-                await Task.Delay(delay, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Failed processing event {EventId} after {Attempts} attempts.", usageEvent.EventId, attempt);
-                await deadLetterSink.PublishAsync(usageEvent, ex.Message, cancellationToken);
-                return ProcessingResult.Failure(attempt, ex.Message);
-            }
-        }
+                attempts++;
+                await persistenceStage.PersistAsync(usageEvent, ct);
+                await analyticsStage.ExportAsync(usageEvent, ct);
+            }, cancellationToken);
 
-        return ProcessingResult.Failure(maxAttempts, "Processing failed.");
+            await finalizeStage.FinalizeAsync(usageEvent, cancellationToken);
+            RecordMetric(usageEvent, "success", null);
+            return ProcessingResult.Success(attempts);
+        }
+        catch (BrokenCircuitException ex)
+        {
+            var failure = new ProcessingFailure(DeadLetterReasonCode.CircuitOpen, ex.Message);
+            logger.LogError(ex, "Circuit open while processing event {EventId}.", usageEvent.EventId);
+            await deadLetterSink.PublishAsync(usageEvent, failure, cancellationToken);
+            RecordMetric(usageEvent, "circuit_open", failure.ReasonCode);
+            return ProcessingResult.Failure(attempts, failure.ReasonCode, failure.Message);
+        }
+        catch (Exception ex)
+        {
+            var failure = new ProcessingFailure(DeadLetterReasonCode.ProcessingFailed, ex.Message);
+            logger.LogError(ex, "Processing failed for event {EventId} after {Attempts} attempts.", usageEvent.EventId, attempts);
+            await deadLetterSink.PublishAsync(usageEvent, failure, cancellationToken);
+            RecordMetric(usageEvent, "failed", failure.ReasonCode);
+            return ProcessingResult.Failure(attempts, failure.ReasonCode, failure.Message);
+        }
     }
 
-    private static bool TryValidate(UsageEvent usageEvent, out string error)
+    private static ResiliencePipeline CreatePipeline(UsagePulsePipelineOptions options, ILogger<UsageEventProcessor> logger)
     {
-        if (string.IsNullOrWhiteSpace(usageEvent.EventId))
-        {
-            error = "EventId is required.";
-            return false;
-        }
+        var maxRetries = Math.Max(0, options.MaxProcessingAttempts - 1);
 
-        if (string.IsNullOrWhiteSpace(usageEvent.TenantId))
-        {
-            error = "TenantId is required.";
-            return false;
-        }
+        return new ResiliencePipelineBuilder()
+            .AddRetry(new RetryStrategyOptions
+            {
+                MaxRetryAttempts = maxRetries,
+                Delay = TimeSpan.FromMilliseconds(options.BaseRetryDelayMs),
+                BackoffType = DelayBackoffType.Exponential,
+                UseJitter = true,
+                OnRetry = arguments =>
+                {
+                    logger.LogWarning(arguments.Outcome.Exception, "Retrying usage event processing. Attempt={Attempt} Delay={Delay}", arguments.AttemptNumber + 1, arguments.RetryDelay);
+                    return default;
+                }
+            })
+            .AddCircuitBreaker(new CircuitBreakerStrategyOptions
+            {
+                FailureRatio = options.CircuitBreakerFailureRatio,
+                MinimumThroughput = options.CircuitBreakerMinimumThroughput,
+                SamplingDuration = TimeSpan.FromSeconds(options.CircuitBreakerSamplingSeconds),
+                BreakDuration = TimeSpan.FromSeconds(options.CircuitBreakerDurationSeconds)
+            })
+            .Build();
+    }
 
-        if (string.IsNullOrWhiteSpace(usageEvent.Feature))
-        {
-            error = "Feature is required.";
-            return false;
-        }
+    private static Activity? StartActivity(UsageEvent usageEvent)
+    {
+        var activity = ProcessingTelemetry.ActivitySource.StartActivity("usagepulse.processing.execute", ActivityKind.Consumer);
+        activity?.SetTag("usagepulse.event.id", usageEvent.EventId);
+        activity?.SetTag("usagepulse.tenant.id", usageEvent.TenantId);
+        activity?.SetTag("usagepulse.feature", usageEvent.Feature);
+        return activity;
+    }
 
-        if (usageEvent.Quantity <= 0)
-        {
-            error = "Quantity must be greater than 0.";
-            return false;
-        }
-
-        if (usageEvent.OccurredAt == default)
-        {
-            error = "OccurredAt is required.";
-            return false;
-        }
-
-        error = string.Empty;
-        return true;
+    private static void RecordMetric(UsageEvent usageEvent, string status, DeadLetterReasonCode? reasonCode)
+    {
+        ProcessingTelemetry.ProcessedEvents.Add(1,
+            new KeyValuePair<string, object?>("tenant", usageEvent.TenantId),
+            new KeyValuePair<string, object?>("feature", usageEvent.Feature),
+            new KeyValuePair<string, object?>("status", status),
+            new KeyValuePair<string, object?>("reasonCode", reasonCode?.ToString()));
     }
 }

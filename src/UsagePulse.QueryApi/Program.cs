@@ -9,7 +9,13 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddOpenTelemetry().UseAzureMonitor();
-builder.Services.Configure<UsagePulseReadOptions>(builder.Configuration.GetSection("UsagePulse"));
+builder.Services.AddOptions<UsagePulseReadOptions>()
+    .Bind(builder.Configuration.GetSection("UsagePulse"))
+    .ValidateDataAnnotations()
+    .Validate(options =>
+            !string.IsNullOrWhiteSpace(options.CosmosConnectionString) || !string.IsNullOrWhiteSpace(options.CosmosEndpoint),
+        "Either CosmosConnectionString or CosmosEndpoint must be configured.")
+    .ValidateOnStart();
 builder.Services.AddSingleton<CosmosClient>(sp => CosmosFactory.Create(sp));
 builder.Services.AddSingleton<UsageSummaryService>();
 

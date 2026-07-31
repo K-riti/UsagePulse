@@ -1,6 +1,7 @@
 using Microsoft.Azure.Cosmos;
 using UsagePulse.Contracts;
 using UsagePulse.Functions.Configuration;
+using UsagePulse.Functions.StorageModels;
 using UsagePulse.Processing.Abstractions;
 
 namespace UsagePulse.Functions.Infrastructure;
@@ -16,26 +17,18 @@ public sealed class CosmosUsageEventRepository : IUsageEventRepository
 
     public async Task StoreAsync(UsageEvent usageEvent, CancellationToken cancellationToken)
     {
-        var document = new UsageEventDocument(
-            usageEvent.EventId,
-            usageEvent.TenantId,
-            usageEvent.UserId,
-            usageEvent.Feature,
-            usageEvent.Quantity,
-            usageEvent.OccurredAt,
-            usageEvent.Dimensions,
-            DateTimeOffset.UtcNow);
+        var document = new UsageEventDocument
+        {
+            Id = usageEvent.EventId,
+            TenantId = usageEvent.TenantId,
+            UserId = usageEvent.UserId,
+            Feature = usageEvent.Feature,
+            Quantity = usageEvent.Quantity,
+            OccurredAt = usageEvent.OccurredAt,
+            Dimensions = usageEvent.Dimensions,
+            IngestedAt = DateTimeOffset.UtcNow
+        };
 
-        await container.UpsertItemAsync(document, new PartitionKey(document.tenantId), cancellationToken: cancellationToken);
+        await container.UpsertItemAsync(document, new PartitionKey(document.TenantId), cancellationToken: cancellationToken);
     }
-
-    private sealed record UsageEventDocument(
-        string id,
-        string tenantId,
-        string userId,
-        string feature,
-        int quantity,
-        DateTimeOffset occurredAt,
-        IReadOnlyDictionary<string, string>? dimensions,
-        DateTimeOffset ingestedAt);
 }

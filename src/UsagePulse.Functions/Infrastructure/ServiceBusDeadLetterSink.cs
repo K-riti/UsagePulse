@@ -1,8 +1,8 @@
-using System.Text.Json;
 using Azure.Messaging.ServiceBus;
 using UsagePulse.Contracts;
 using UsagePulse.Functions.Configuration;
 using UsagePulse.Processing.Abstractions;
+using UsagePulse.Serialization;
 
 namespace UsagePulse.Functions.Infrastructure;
 
@@ -15,14 +15,9 @@ public sealed class ServiceBusDeadLetterSink : IDeadLetterSink, IAsyncDisposable
         sender = serviceBusClient.CreateSender(settings.DeadLetterQueue);
     }
 
-    public async Task PublishAsync(UsageEvent usageEvent, string reason, CancellationToken cancellationToken)
+    public async Task PublishAsync(UsageEvent usageEvent, ProcessingFailure failure, CancellationToken cancellationToken)
     {
-        var body = JsonSerializer.Serialize(new
-        {
-            usageEvent,
-            reason,
-            failedAt = DateTimeOffset.UtcNow
-        });
+        var body = DeadLetterEnvelopeSerializer.Serialize(usageEvent, failure);
 
         var message = new ServiceBusMessage(body)
         {

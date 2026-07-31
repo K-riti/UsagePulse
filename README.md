@@ -41,6 +41,12 @@ Without a platform like UsagePulse, product teams usually face these problems:
 
 UsagePulse addresses those directly by providing resilient ingestion, validation, idempotent processing, and observable distributed workflows.
 
+### Impact Summary
+
+- **Business:** gives reliable usage data for billing, adoption, and product decisions.
+- **Engineering:** prevents bad telemetry from corrupting analytics.
+- **Operations:** improves trust in near real-time dashboards and incident analysis.
+
 ## Problem Fixed in This Iteration
 
 Two concrete reliability/data-quality issues were addressed:
@@ -152,16 +158,53 @@ terraform plan
 
 ## Feature Roadmap (Next Implementations)
 
-1. Event schema versioning with contract compatibility checks.
-2. Poison event replay workflow from DLQ back to processing queue.
-3. Kusto native ingestion SDK path (instead of HTTP adapter) with batching.
-4. Multi-tenant quotas, throttling, and burst policies.
-5. Materialized views for low-latency query API reads.
-6. Dashboard service for real-time tenant analytics.
-7. Alerting pack (SLA, queue lag, ingestion latency, failure rate).
-8. End-to-end integration tests with local emulators and test containers.
-9. Secure-by-default identity model using Managed Identity everywhere.
-10. Blue/green deployment strategy for API and Functions.
+### High-Value Features to Take UsagePulse to the Next Level
+
+#### P0 (Immediate Value)
+
+1. **Schema Registry + Contract Versioning**
+   - Enforce event compatibility at ingestion.
+   - Prevents breaking producers from corrupting downstream analytics.
+
+2. **DLQ Replay & Self-Healing Workflow**
+   - Add replay API/job to reprocess corrected poison events.
+   - Reduces data loss and manual production operations.
+
+3. **Kusto Native Ingestion with Batching**
+   - Replace generic HTTP sink with ADX ingestion SDK and buffered batches.
+   - Improves throughput and lowers ingestion latency/cost.
+
+4. **SLO-based Alerting Pack**
+   - Alerts on queue lag, failed processing %, ingestion latency, and throughput drops.
+   - Enables proactive operations before customer-visible impact.
+
+#### P1 (Scale & Product Value)
+
+5. **Tenant Quotas + Rate Limiting + Burst Control**
+   - Protects shared infrastructure from noisy-neighbor tenants.
+   - Supports monetization tiers and enterprise controls.
+
+6. **Low-Latency Query Path (Materialized Views + Cache)**
+   - Add pre-aggregated views for common windows (5m, 1h, 24h).
+   - Makes dashboards faster and more predictable at scale.
+
+7. **Real-Time Usage Dashboard Service**
+   - Dedicated dashboard/API for usage trends, spikes, and anomalies.
+   - Converts telemetry into product and customer-facing insights.
+
+#### P2 (Enterprise Readiness)
+
+8. **Anomaly Detection (Usage/Billing Guardrails)**
+   - Detect unexpected drops/spikes and suspicious usage patterns.
+   - Improves trust for finance, product, and security teams.
+
+9. **Managed Identity + Key Vault Everywhere**
+   - Remove connection-string dependency from runtime paths.
+   - Improves security posture and auditability.
+
+10. **Blue/Green + Progressive Delivery**
+   - Safer releases for API and Functions with controlled rollout.
+   - Minimizes deployment risk and rollback time.
 
 ## Refactoring Backlog
 

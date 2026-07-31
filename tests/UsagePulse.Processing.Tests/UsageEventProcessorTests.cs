@@ -4,6 +4,7 @@ using UsagePulse.Contracts;
 using UsagePulse.Processing.Abstractions;
 using UsagePulse.Processing.Options;
 using UsagePulse.Processing.Services;
+using UsagePulse.Processing.Services.Pipeline;
 
 namespace UsagePulse.Processing.Tests;
 
@@ -61,7 +62,7 @@ public class UsageEventProcessorTests
         Assert.Equal(0, result.Attempts);
         Assert.Equal(0, repository.StoreCalls);
         Assert.Single(deadLetter.Failures);
-        Assert.Contains("Quantity", deadLetter.Failures[0]);
+        Assert.Contains("Quantity", deadLetter.Failures[0].Message);
     }
 
     private static UsageEventProcessor CreateProcessor(
@@ -70,10 +71,15 @@ public class UsageEventProcessorTests
         IUsageAnalyticsSink? analyticsSink = null,
         IDeadLetterSink? deadLetterSink = null)
     {
+        var effectiveRepository = repository ?? new FakeUsageRepository();
+        var effectiveAnalytics = analyticsSink ?? new FakeAnalyticsSink();
+
         return new UsageEventProcessor(
-            idempotencyStore,
-            repository ?? new FakeUsageRepository(),
-            analyticsSink ?? new FakeAnalyticsSink(),
+            new UsageEventValidationStage(),
+            new UsageEventDeduplicationStage(idempotencyStore),
+            new UsageEventPersistenceStage(effectiveRepository),
+            new UsageEventAnalyticsStage(effectiveAnalytics),
+            new UsageEventFinalizeStage(idempotencyStore),
             deadLetterSink ?? new FakeDeadLetterSink(),
             Microsoft.Extensions.Options.Options.Create(new UsagePulsePipelineOptions { MaxProcessingAttempts = 3, BaseRetryDelayMs = 1 }),
             NullLogger<UsageEventProcessor>.Instance);
@@ -133,11 +139,11 @@ public class UsageEventProcessorTests
 
     private sealed class FakeDeadLetterSink : IDeadLetterSink
     {
-        public List<string> Failures { get; } = [];
+        public List<ProcessingFailure> Failures { get; } = [];
 
-        public Task PublishAsync(UsageEvent usageEvent, string reason, CancellationToken cancellationToken)
+        public Task PublishAsync(UsageEvent usageEvent, ProcessingFailure failure, CancellationToken cancellationToken)
         {
-            Failures.Add(reason);
+            Failures.Add(failure);
             return Task.CompletedTask;
         }
     }

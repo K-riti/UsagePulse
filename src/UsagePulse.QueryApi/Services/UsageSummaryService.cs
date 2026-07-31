@@ -2,6 +2,7 @@ using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Options;
 using UsagePulse.Contracts;
 using UsagePulse.QueryApi.Configuration;
+using UsagePulse.QueryApi.StorageModels;
 
 namespace UsagePulse.QueryApi.Services;
 
@@ -31,19 +32,17 @@ public sealed class UsageSummaryService
         var eventCount = 0;
         long totalQuantity = 0;
 
-        using var iterator = container.GetItemQueryIterator<UsageProjection>(query);
+        using var iterator = container.GetItemQueryIterator<UsageSummaryProjectionDocument>(query);
         while (iterator.HasMoreResults)
         {
             foreach (var item in await iterator.ReadNextAsync(cancellationToken))
             {
                 eventCount++;
-                totalQuantity += item.quantity;
-                featureBreakdown[item.feature] = featureBreakdown.GetValueOrDefault(item.feature) + item.quantity;
+                totalQuantity += item.Quantity;
+                featureBreakdown[item.Feature] = featureBreakdown.GetValueOrDefault(item.Feature) + item.Quantity;
             }
         }
 
         return new TenantUsageSummary(tenantId, from, to, eventCount, totalQuantity, featureBreakdown);
     }
-
-    private sealed record UsageProjection(string feature, int quantity);
-}
+    }
