@@ -1,0 +1,22 @@
+WITH NormalizedEvents AS (
+    SELECT
+        EventId,
+        TenantId,
+        UserId,
+        Feature,
+        Quantity,
+        OccurredAt
+    FROM input EventHubInput TIMESTAMP BY OccurredAt
+)
+SELECT
+    TenantId,
+    Feature,
+    System.Timestamp() AS WindowEnd,
+    COUNT(*) AS EventCount,
+    SUM(Quantity) AS TotalQuantity
+INTO CosmosAggregateOutput
+FROM NormalizedEvents
+GROUP BY
+    TenantId,
+    Feature,
+    TumblingWindow(minute, 1);

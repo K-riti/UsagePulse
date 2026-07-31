@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: usagepulse-queryapi
+  labels:
+    app: usagepulse-queryapi
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: usagepulse-queryapi
+  template:
+    metadata:
+      labels:
+        app: usagepulse-queryapi
+    spec:
+      containers:
+      - name: queryapi
+        image: usagepulse.azurecr.io/usagepulse-queryapi:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: ASPNETCORE_URLS
+          value: http://+:8080
+        - name: APPLICATIONINSIGHTS_CONNECTION_STRING
+          valueFrom:
+            secretKeyRef:
+              name: usagepulse-secrets
+              key: appInsightsConnectionString
+        - name: UsagePulse__CosmosEndpoint
+          valueFrom:
+            secretKeyRef:
+              name: usagepulse-secrets
+              key: cosmosEndpoint
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: usagepulse-queryapi
+spec:
+  selector:
+    app: usagepulse-queryapi
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: usagepulse-queryapi
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: usagepulse-queryapi
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70

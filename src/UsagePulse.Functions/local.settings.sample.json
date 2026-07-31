@@ -1,0 +1,23 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "APPLICATIONINSIGHTS_CONNECTION_STRING": "",
+    "UsagePulseEventHubConnection": "",
+    "UsagePulseServiceBusConnection": "",
+    "UsagePulse:EventHubName": "usage-events",
+    "UsagePulse:ServiceBusQueue": "usage-events-work",
+    "UsagePulse:DeadLetterQueue": "usage-events-dlq",
+    "UsagePulse:ServiceBusNamespace": "",
+    "UsagePulse:ServiceBusConnectionString": "",
+    "UsagePulse:CosmosEndpoint": "",
+    "UsagePulse:CosmosConnectionString": "",
+    "UsagePulse:CosmosDatabase": "usagepulse",
+    "UsagePulse:EventsContainer": "usage-events",
+    "UsagePulse:IdempotencyContainer": "usage-idempotency",
+    "UsagePulse:KustoIngestionEndpoint": "",
+    "UsagePulse:MaxProcessingAttempts": "3",
+    "UsagePulse:BaseRetryDelayMs": "250"
+  }
+}
