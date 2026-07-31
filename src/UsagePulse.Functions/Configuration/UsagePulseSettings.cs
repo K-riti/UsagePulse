@@ -30,7 +30,35 @@ public sealed class UsagePulseSettings
     [Required]
     public string IdempotencyContainer { get; set; } = "usage-idempotency";
 
-    public string KustoIngestionEndpoint { get; set; } = string.Empty;
+    [Required]
+    public string SummaryViewsContainer { get; set; } = "usage-summary-views";
+
+    public string KustoClusterUri { get; set; } = string.Empty;
+
+    public string KustoDatabase { get; set; } = "usagepulse";
+
+    public string KustoTable { get; set; } = "UsageEvents";
+
+    public string KustoManagedIdentityClientId { get; set; } = string.Empty;
+
+    [Range(1, 5000)]
+    public int KustoBatchSize { get; set; } = 250;
+
+    [Range(1, 60)]
+    public int KustoFlushIntervalSeconds { get; set; } = 5;
+
+    [Range(1, 100)]
+    public int CurrentSchemaVersion { get; set; } = 1;
+
+    [Range(1, 100)]
+    public int MinimumCompatibleSchemaVersion { get; set; } = 1;
+
+    public bool AllowConnectionStringFallback { get; set; }
+
+    [Required]
+    public TenantQuotaPolicySettings DefaultTenantQuota { get; set; } = new();
+
+    public List<TenantQuotaOverrideSettings> TenantQuotas { get; set; } = [];
 
     [Range(1, 10)]
     public int MaxProcessingAttempts { get; set; } = 3;

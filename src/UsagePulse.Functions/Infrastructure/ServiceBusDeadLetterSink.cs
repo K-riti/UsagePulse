@@ -22,8 +22,12 @@ public sealed class ServiceBusDeadLetterSink : IDeadLetterSink, IAsyncDisposable
         var message = new ServiceBusMessage(body)
         {
             MessageId = usageEvent.EventId,
-            Subject = "usage-event-dead-letter"
+            Subject = "usage-event-dead-letter",
+            SessionId = usageEvent.TenantId
         };
+
+        message.ApplicationProperties["reasonCode"] = failure.ReasonCode.ToString();
+        message.ApplicationProperties["schemaVersion"] = usageEvent.SchemaVersion;
 
         await sender.SendMessageAsync(message, cancellationToken);
     }

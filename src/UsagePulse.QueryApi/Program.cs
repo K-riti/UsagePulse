@@ -1,4 +1,3 @@
-using Azure.Identity;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Microsoft.Azure.Cosmos;
 using UsagePulse.QueryApi.Configuration;
@@ -13,11 +12,14 @@ builder.Services.AddOptions<UsagePulseReadOptions>()
     .Bind(builder.Configuration.GetSection("UsagePulse"))
     .ValidateDataAnnotations()
     .Validate(options =>
-            !string.IsNullOrWhiteSpace(options.CosmosConnectionString) || !string.IsNullOrWhiteSpace(options.CosmosEndpoint),
-        "Either CosmosConnectionString or CosmosEndpoint must be configured.")
+            options.AllowConnectionStringFallback
+                ? !string.IsNullOrWhiteSpace(options.CosmosConnectionString) || !string.IsNullOrWhiteSpace(options.CosmosEndpoint)
+                : !string.IsNullOrWhiteSpace(options.CosmosEndpoint),
+        "Managed Identity is the default. Configure CosmosEndpoint, or explicitly enable AllowConnectionStringFallback with CosmosConnectionString.")
     .ValidateOnStart();
 builder.Services.AddSingleton<CosmosClient>(sp => CosmosFactory.Create(sp));
 builder.Services.AddSingleton<UsageSummaryService>();
+builder.Services.AddSingleton<RealtimeDashboardService>();
 
 var app = builder.Build();
 
@@ -47,6 +49,27 @@ app.MapGet("/api/usage/{tenantId}/summary", async (
     return Results.Ok(summary);
 })
 .WithName("GetTenantUsageSummary")
+.WithOpenApi();
+
+app.MapGet("/api/dashboard/{tenantId}/realtime", async (
+    string tenantId,
+    string? window,
+    RealtimeDashboardService dashboardService,
+    CancellationToken cancellationToken) =>
+{
+    var selectedWindow = string.IsNullOrWhiteSpace(window) ? "1h" : window;
+
+    try
+    {
+        var dashboard = await dashboardService.GetRealtimeAsync(tenantId, selectedWindow, cancellationToken);
+        return Results.Ok(dashboard);
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(ex.Message);
+    }
+})
+.WithName("GetTenantRealtimeDashboard")
 .WithOpenApi();
 
 app.Run();

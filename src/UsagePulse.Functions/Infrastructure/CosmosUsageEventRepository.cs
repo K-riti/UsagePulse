@@ -26,6 +26,8 @@ public sealed class CosmosUsageEventRepository : IUsageEventRepository
             Quantity = usageEvent.Quantity,
             OccurredAt = usageEvent.OccurredAt,
             Dimensions = usageEvent.Dimensions,
+            SchemaVersion = usageEvent.SchemaVersion,
+            Source = usageEvent.Source,
             IngestedAt = DateTimeOffset.UtcNow
         };
 

@@ -10,5 +10,15 @@ public static class DeadLetterEnvelopeSerializer
         return JsonSerializer.Serialize(new DeadLetterEnvelope(usageEvent, failure, DateTimeOffset.UtcNow), UsagePulseJsonDefaults.Options);
     }
 
-    private sealed record DeadLetterEnvelope(UsageEvent UsageEvent, ProcessingFailure Failure, DateTimeOffset FailedAt);
+    public static DeadLetterEnvelope? Deserialize(string payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+        {
+            return null;
+        }
+
+        return JsonSerializer.Deserialize<DeadLetterEnvelope>(payload, UsagePulseJsonDefaults.Options);
+    }
 }
+
+public sealed record DeadLetterEnvelope(UsageEvent UsageEvent, ProcessingFailure Failure, DateTimeOffset FailedAt);

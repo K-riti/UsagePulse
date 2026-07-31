@@ -25,6 +25,12 @@ public sealed class UsageEventDocument
     [JsonProperty("dimensions")]
     public IReadOnlyDictionary<string, string>? Dimensions { get; init; }
 
+    [JsonProperty("schemaVersion")]
+    public int SchemaVersion { get; init; }
+
+    [JsonProperty("source")]
+    public string? Source { get; init; }
+
     [JsonProperty("ingestedAt")]
     public required DateTimeOffset IngestedAt { get; init; }
 }

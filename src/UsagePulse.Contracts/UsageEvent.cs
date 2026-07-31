@@ -7,4 +7,6 @@ public sealed record UsageEvent(
     string Feature,
     int Quantity,
     DateTimeOffset OccurredAt,
-    IReadOnlyDictionary<string, string>? Dimensions = null);
+    IReadOnlyDictionary<string, string>? Dimensions = null,
+    int SchemaVersion = 1,
+    string? Source = null);

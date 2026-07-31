@@ -23,11 +23,17 @@ builder.Services.AddOptions<UsagePulseSettings>()
     .Bind(builder.Configuration.GetSection("UsagePulse"))
     .ValidateDataAnnotations()
     .Validate(settings =>
-            !string.IsNullOrWhiteSpace(settings.ServiceBusConnectionString) || !string.IsNullOrWhiteSpace(settings.ServiceBusNamespace),
-        "Either ServiceBusConnectionString or ServiceBusNamespace must be configured.")
+            settings.AllowConnectionStringFallback
+                ? !string.IsNullOrWhiteSpace(settings.ServiceBusConnectionString) || !string.IsNullOrWhiteSpace(settings.ServiceBusNamespace)
+                : !string.IsNullOrWhiteSpace(settings.ServiceBusNamespace),
+        "Managed Identity is the default. Configure ServiceBusNamespace, or explicitly enable AllowConnectionStringFallback with ServiceBusConnectionString.")
     .Validate(settings =>
-            !string.IsNullOrWhiteSpace(settings.CosmosConnectionString) || !string.IsNullOrWhiteSpace(settings.CosmosEndpoint),
-        "Either CosmosConnectionString or CosmosEndpoint must be configured.")
+            settings.AllowConnectionStringFallback
+                ? !string.IsNullOrWhiteSpace(settings.CosmosConnectionString) || !string.IsNullOrWhiteSpace(settings.CosmosEndpoint)
+                : !string.IsNullOrWhiteSpace(settings.CosmosEndpoint),
+        "Managed Identity is the default. Configure CosmosEndpoint, or explicitly enable AllowConnectionStringFallback with CosmosConnectionString.")
+    .Validate(settings => settings.MinimumCompatibleSchemaVersion <= settings.CurrentSchemaVersion,
+        "MinimumCompatibleSchemaVersion must be less than or equal to CurrentSchemaVersion.")
     .ValidateOnStart();
 
 builder.Services.AddOptions<UsagePulsePipelineOptions>()
@@ -36,13 +42,14 @@ builder.Services.AddOptions<UsagePulsePipelineOptions>()
     .ValidateOnStart();
 
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<UsagePulseSettings>>().Value);
+builder.Services.AddSingleton<UsageIngressPolicyEvaluator>();
 builder.Services.AddUsagePulseProcessing();
 builder.Services.AddHttpClient();
 
 builder.Services.AddSingleton<ServiceBusClient>(sp =>
 {
     var settings = sp.GetRequiredService<IOptions<UsagePulseSettings>>().Value;
-    return !string.IsNullOrWhiteSpace(settings.ServiceBusConnectionString)
+    return settings.AllowConnectionStringFallback && !string.IsNullOrWhiteSpace(settings.ServiceBusConnectionString)
         ? new ServiceBusClient(settings.ServiceBusConnectionString)
         : new ServiceBusClient(settings.ServiceBusNamespace, new DefaultAzureCredential());
 });
@@ -50,7 +57,7 @@ builder.Services.AddSingleton<ServiceBusClient>(sp =>
 builder.Services.AddSingleton<CosmosClient>(sp =>
 {
     var settings = sp.GetRequiredService<IOptions<UsagePulseSettings>>().Value;
-    return !string.IsNullOrWhiteSpace(settings.CosmosConnectionString)
+    return settings.AllowConnectionStringFallback && !string.IsNullOrWhiteSpace(settings.CosmosConnectionString)
         ? new CosmosClient(settings.CosmosConnectionString)
         : new CosmosClient(settings.CosmosEndpoint, new DefaultAzureCredential());
 });
