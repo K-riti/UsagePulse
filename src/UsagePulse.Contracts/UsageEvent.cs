@@ -1,10 +1,10 @@
 namespace UsagePulse.Contracts;
 
 public sealed record UsageEvent(
-    string EventId,
-    string TenantId,
+    EventId EventId,
+    TenantId TenantId,
     string UserId,
-    string Feature,
+    FeatureName Feature,
     int Quantity,
     DateTimeOffset OccurredAt,
     IReadOnlyDictionary<string, string>? Dimensions = null,

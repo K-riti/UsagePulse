@@ -1,153 +1,266 @@
 # UsagePulse
 
-UsagePulse is a cloud-scale Azure usage analytics platform for near real-time telemetry ingestion, processing, analytics, and query.
+UsagePulse is a near real-time Azure usage telemetry platform for ingesting product events, enforcing contract safety, processing events reliably, exporting analytics, and serving tenant-facing usage summaries.
 
-## Tech Stack
+## What the platform does
+
+UsagePulse is designed for teams that need trusted usage data for analytics, product intelligence, and billing-adjacent reporting. The platform focuses on four core guarantees:
+
+- **Safe ingestion** with schema compatibility checks and tenant-aware throttling.
+- **Reliable processing** with validation, idempotency, retries, circuit breaking, and dead-letter handling.
+- **Fast analytics delivery** through Cosmos-backed summaries and batched Azure Data Explorer ingestion.
+- **Operational recovery** with a replay endpoint for dead-lettered events.
+
+## Current architecture
+
+```text
+Event Hubs -> UsageIngestionFunction -> Service Bus work queue -> UsageProcessingFunction
+          -> ingress policy checks                         -> processing pipeline
+                                                           -> Cosmos DB raw event store
+                                                           -> Cosmos DB summary view store
+                                                           -> Azure Data Explorer batched ingest
+                                                           -> dead-letter queue + replay workflow
+
+Query API -> Cosmos DB summaries/raw events -> tenant summary + realtime dashboard endpoints
+```
+
+## Tech stack
 
 - .NET 8
-- Azure Functions (isolated worker)
+- Azure Functions isolated worker
 - Azure Event Hubs
 - Azure Service Bus
 - Azure Cosmos DB
 - Azure Data Explorer (Kusto)
-- Azure Stream Analytics
-- AKS
+- OpenTelemetry + Azure Monitor / Application Insights
 - Terraform
 - Azure DevOps
-- Azure Monitor + Application Insights + OpenTelemetry
+- AKS deployment manifests for the query API
 
-## Current Capabilities
+## Implemented capabilities
 
-- Event-driven ingestion from Event Hubs to Service Bus.
-- Queue-based processing pipeline with:
-  - retry with exponential backoff
-  - idempotency checks
-  - application-level dead-letter publishing
-  - payload validation guardrails (required fields, positive quantity, valid timestamp)
-- Persistence in Cosmos DB for raw usage events.
-- Kusto sink integration point for analytics export.
-- Query API endpoint for tenant usage summary.
-- Terraform baseline for core Azure resources.
-- Azure DevOps pipeline for build, test, and infrastructure plan/apply.
+### Ingestion and contract safety
 
-## Why This Project Matters (Impact)
+- Event ingestion from Event Hubs into Azure Functions.
+- Strict contract model with value objects:
+  - `EventId`
+  - `TenantId`
+  - `FeatureName`
+- Version-aware event contract through `UsageEvent.SchemaVersion` and `UsageEvent.Source`.
+- Ingress-time schema compatibility enforcement:
+  - minimum and current supported schema versions
+  - optional per-source and per-feature contract rules
+- Tenant quota enforcement with burst control before events enter the main processing queue.
+- Correlation propagation across asynchronous boundaries for distributed tracing.
 
-Without a platform like UsagePulse, product teams usually face these problems:
+### Processing pipeline
 
-- No trusted usage data for billing, adoption, and KPI decisions.
-- Lost or duplicated telemetry during traffic spikes.
-- Slow incident debugging due to missing distributed traces.
-- Incorrect analytics from malformed events or wrong aggregations.
+- Thin trigger handlers with orchestration separated from business logic.
+- Pipeline-style processor with dedicated stages for:
+  - validation
+  - deduplication
+  - persistence
+  - analytics export
+  - finalization
+- Validation at the contract boundary for malformed or incomplete usage events.
+- Idempotency protection to prevent duplicate event processing.
+- Retry with exponential backoff.
+- Circuit breaker protection using Polly.
+- Strongly typed dead-letter reason codes and validation codes.
 
-UsagePulse addresses those directly by providing resilient ingestion, validation, idempotent processing, and observable distributed workflows.
+### Storage and analytics
 
-### Impact Summary
+- Raw usage event persistence in Cosmos DB.
+- Materialized summary view documents in Cosmos DB for hot dashboard windows.
+- Native Azure Data Explorer queued ingestion using the Kusto ingestion SDK.
+- Buffered batching for analytics export with configurable batch size and flush interval.
+- Summary windows currently maintained for:
+  - `5m`
+  - `1h`
+  - `24h`
 
-- **Business:** gives reliable usage data for billing, adoption, and product decisions.
-- **Engineering:** prevents bad telemetry from corrupting analytics.
-- **Operations:** improves trust in near real-time dashboards and incident analysis.
+### Recovery and operations
 
-## Problem Fixed in This Iteration
+- Dead-letter publishing for invalid, incompatible, quota-exceeded, and failed events.
+- Replay HTTP function for dead-letter queue recovery with:
+  - max message limits
+  - tenant filter
+  - reason-code filter
+  - dry-run mode
+- Managed Identity-first runtime configuration.
+- Azure Key Vault integration for configuration bootstrapping.
+- OpenTelemetry instrumentation for processing metrics and traces.
 
-Two concrete reliability/data-quality issues were addressed:
+### Query experience
 
-1. Invalid events could enter processing and pollute analytics.  
-   Fix: Early validation in `UsageEventProcessor` now rejects malformed payloads and dead-letters them immediately.
+- Tenant usage summary endpoint.
+- Realtime dashboard endpoint backed by materialized summary windows.
+- Swagger enabled in development for the query API.
 
-2. Feature breakdown could under/overstate usage by counting events instead of summing quantity.  
-   Fix: `UsageSummaryService` now aggregates per-feature totals using `quantity`.
-
-## Solution Structure
+## Solution layout
 
 - `src/UsagePulse.Contracts`  
-  Shared domain contracts (`UsageEvent`, `ProcessingResult`, `TenantUsageSummary`).
+  Shared contracts, typed identifiers, validation failures, and dashboard/summary response models.
+- `src/UsagePulse.Serialization`  
+  JSON serialization helpers for usage events and dead-letter envelopes.
 - `src/UsagePulse.Processing`  
-  Pipeline abstractions and `UsageEventProcessor` implementation.
+  Core processing abstractions, pipeline stages, telemetry, and resilience behavior.
 - `src/UsagePulse.Functions`  
-  Ingestion and processing Azure Functions + infrastructure adapters.
+  Azure Functions host, ingestion/processing/replay functions, orchestrators, and infrastructure adapters.
 - `src/UsagePulse.QueryApi`  
-  API for tenant usage summaries (AKS target).
+  Read API for summaries and realtime dashboard views.
 - `tests/UsagePulse.Processing.Tests`  
-  Unit tests for duplicate handling, retry behavior, and dead-letter flow.
+  Unit tests for retries, dead-letter behavior, duplicates, and validation.
+- `tests/UsagePulse.Functions.Tests`  
+  Unit tests for ingress policy decisions and dead-letter envelope behavior.
+- `tests/UsagePulse.Architecture.Tests`  
+  Layering tests that guard contracts and processing boundaries.
 - `infra/terraform`  
-  IaC for resource group, Event Hubs, Service Bus, Cosmos DB, ADX, Stream Analytics, AKS, and monitoring.
+  Infrastructure as code for the Azure resource baseline.
 - `deploy/aks`  
-  Kubernetes deployment + service + HPA manifest.
+  Kubernetes manifest for the query API deployment.
 - `deploy/stream-analytics`  
   Stream Analytics query template.
 - `azure-pipelines.yml`  
   CI/CD pipeline definition.
 
-## High-Level Flow
+## Event contract
 
-1. Producers publish usage events to Event Hubs.
-2. `UsageIngestionFunction` validates and forwards events to Service Bus work queue.
-3. `UsageProcessingFunction` consumes queue messages.
-4. `UsageEventProcessor` applies idempotency + retry and writes to data stores/sinks.
-5. Failed events are published to dead-letter queue.
-6. Query API reads from Cosmos DB and returns usage summaries.
-7. Telemetry is exported via OpenTelemetry to Azure Monitor/App Insights.
+The central event contract is `UsageEvent`:
 
-## API Endpoints
+- `EventId`
+- `TenantId`
+- `UserId`
+- `Feature`
+- `Quantity`
+- `OccurredAt`
+- `Dimensions`
+- `SchemaVersion`
+- `Source`
+
+This model is validated both structurally and operationally before deep processing begins.
+
+## API surface
+
+### Query API
 
 - `GET /health`
 - `GET /api/usage/{tenantId}/summary?from=<iso>&to=<iso>`
+- `GET /api/dashboard/{tenantId}/realtime?window=5m|1h|24h`
 
-## Local Development
+### Functions
+
+- Event Hub-triggered ingestion via `UsageIngestionFunction`
+- Service Bus-triggered processing via `UsageProcessingFunction`
+- HTTP replay endpoint via `POST /api/operations/dlq/replay`
+
+## Configuration
+
+Both the Functions app and Query API use the `UsagePulse` configuration section.
+
+### Core messaging and storage
+
+- `EventHubName`
+- `ServiceBusQueue`
+- `DeadLetterQueue`
+- `ServiceBusNamespace`
+- `ServiceBusConnectionString`
+- `CosmosEndpoint`
+- `CosmosConnectionString`
+- `CosmosDatabase`
+- `EventsContainer`
+- `IdempotencyContainer`
+- `SummaryViewsContainer`
+
+### Analytics export
+
+- `KustoClusterUri`
+- `KustoDatabase`
+- `KustoTable`
+- `KustoManagedIdentityClientId`
+- `KustoBatchSize`
+- `KustoFlushIntervalSeconds`
+
+### Contract and tenant controls
+
+- `CurrentSchemaVersion`
+- `MinimumCompatibleSchemaVersion`
+- `SchemaContracts`
+- `DefaultTenantQuota`
+- `TenantQuotas`
+
+### Processing resilience
+
+- `MaxProcessingAttempts`
+- `BaseRetryDelayMs`
+- `CircuitBreakerSamplingSeconds`
+- `CircuitBreakerDurationSeconds`
+- `CircuitBreakerMinimumThroughput`
+- `CircuitBreakerFailureRatio`
+
+### Security and identity
+
+- `KeyVaultUri`
+- `AllowConnectionStringFallback`
+
+Managed Identity is the default runtime path. Connection strings are supported only as an explicit fallback.
+
+## Local development
 
 ### Prerequisites
 
 - .NET SDK 8.x
-- Azure Functions Core Tools (for local Functions run)
-- Terraform >= 1.6
+- Azure Functions Core Tools
+- Terraform 1.6 or later
+- Access to Azure resources for Cosmos DB, Service Bus, Event Hubs, and optional ADX
 
-### Build & Test
+### Build
 
 ```bash
 dotnet restore UsagePulse.slnx
 dotnet build UsagePulse.slnx
+```
+
+### Test
+
+```bash
 dotnet test UsagePulse.slnx
 ```
 
-### Run Query API
+### Run the Query API
 
 ```bash
 dotnet run --project src/UsagePulse.QueryApi/UsagePulse.QueryApi.csproj
 ```
 
-### Run Functions
+### Run the Functions app
 
 1. Copy `src/UsagePulse.Functions/local.settings.sample.json` to `local.settings.json`.
-2. Fill connection settings.
-3. Run:
+2. Populate the `UsagePulse` configuration values.
+3. Start the Functions host:
 
 ```bash
 func start --csharp
 ```
 
-## Configuration
+## Operational focus areas
 
-### Functions (`UsagePulse` section)
+The current implementation already includes foundational work for several high-value platform capabilities:
 
-- `EventHubName`
-- `ServiceBusQueue`
-- `DeadLetterQueue`
-- `ServiceBusNamespace` or `ServiceBusConnectionString`
-- `CosmosEndpoint` or `CosmosConnectionString`
-- `CosmosDatabase`
-- `EventsContainer`
-- `IdempotencyContainer`
-- `KustoIngestionEndpoint`
-- `MaxProcessingAttempts`
-- `BaseRetryDelayMs`
+- schema compatibility checks at ingestion
+- DLQ replay workflow
+- native Kusto ingestion with batching
+- tenant quotas and burst handling
+- low-latency dashboard windows
+- realtime dashboard API
+- managed identity and Key Vault-first configuration
+- architecture tests for layering
 
-### Query API (`UsagePulse` section)
+Remaining platform work is mainly around deeper production hardening, richer alerting, anomaly detection, progressive delivery, and broader query-path optimizations.
 
-- `CosmosEndpoint` or `CosmosConnectionString`
-- `CosmosDatabase`
-- `EventsContainer`
+## Infrastructure
 
-## Terraform
+### Terraform
 
 ```bash
 cd infra/terraform
@@ -156,93 +269,21 @@ terraform validate
 terraform plan
 ```
 
-## Feature Roadmap (Next Implementations)
+### Deployment assets
 
-### High-Value Features to Take UsagePulse to the Next Level
+- `deploy/aks/usagepulse-queryapi.yaml`
+- `deploy/stream-analytics/usagepulse-job.asaql`
 
-#### P0 (Immediate Value)
+## Testing strategy
 
-1. **Schema Registry + Contract Versioning**
-   - Enforce event compatibility at ingestion.
-   - Prevents breaking producers from corrupting downstream analytics.
+The repository currently contains:
 
-2. **DLQ Replay & Self-Healing Workflow**
-   - Add replay API/job to reprocess corrected poison events.
-   - Reduces data loss and manual production operations.
+- processing unit tests
+- functions unit tests
+- architecture boundary tests
 
-3. **Kusto Native Ingestion with Batching**
-   - Replace generic HTTP sink with ADX ingestion SDK and buffered batches.
-   - Improves throughput and lowers ingestion latency/cost.
+These tests cover reliability-sensitive areas such as retries, duplicates, validation failures, schema rejection, quota enforcement, and basic layering rules.
 
-4. **SLO-based Alerting Pack**
-   - Alerts on queue lag, failed processing %, ingestion latency, and throughput drops.
-   - Enables proactive operations before customer-visible impact.
+## Why UsagePulse matters
 
-#### P1 (Scale & Product Value)
-
-5. **Tenant Quotas + Rate Limiting + Burst Control**
-   - Protects shared infrastructure from noisy-neighbor tenants.
-   - Supports monetization tiers and enterprise controls.
-
-6. **Low-Latency Query Path (Materialized Views + Cache)**
-   - Add pre-aggregated views for common windows (5m, 1h, 24h).
-   - Makes dashboards faster and more predictable at scale.
-
-7. **Real-Time Usage Dashboard Service**
-   - Dedicated dashboard/API for usage trends, spikes, and anomalies.
-   - Converts telemetry into product and customer-facing insights.
-
-#### P2 (Enterprise Readiness)
-
-8. **Anomaly Detection (Usage/Billing Guardrails)**
-   - Detect unexpected drops/spikes and suspicious usage patterns.
-   - Improves trust for finance, product, and security teams.
-
-9. **Managed Identity + Key Vault Everywhere**
-   - Remove connection-string dependency from runtime paths.
-   - Improves security posture and auditability.
-
-10. **Blue/Green + Progressive Delivery**
-   - Safer releases for API and Functions with controlled rollout.
-   - Minimizes deployment risk and rollback time.
-
-## Refactoring Backlog
-
-### Domain & Contracts
-
-- Introduce strict value objects (`TenantId`, `EventId`, `FeatureName`).
-- Add validation layer at contract boundary.
-
-### Processing Layer
-
-- Split `UsageEventProcessor` into small pipeline behaviors (idempotency, retry, persistence, analytics sink).
-- Introduce resilience policies with Polly for standardized retry/circuit-breaker behavior.
-- Make dead-letter reason codes strongly typed.
-
-### Functions Layer
-
-- Move trigger handlers to thin orchestrators only.
-- Centralize serialization/deserialization settings.
-- Add correlation propagation helpers for distributed tracing.
-
-### Query API
-
-- Separate query models from storage models.
-- Add pagination and feature-level filtering.
-- Add caching layer for common summary windows.
-
-### Cross-Cutting
-
-- Add analyzers and enforce code style in CI.
-- Add architecture tests to keep layering boundaries.
-- Improve observability conventions (metric names, trace attributes, log schema).
-- Extract environment-specific configuration into dedicated deployment overlays.
-
-## Resume Alignment
-
-This project demonstrates the architecture described in your resume:
-
-- Distributed event-driven ingestion and processing with Event Hubs + Service Bus + Functions.
-- Fault-tolerant data pipeline with retries, idempotency, and dead-letter handling.
-- Analytics storage/serving through Cosmos DB, Kusto, and Stream Analytics.
-- Cloud automation and operational readiness using Terraform, Azure DevOps, AKS, and OpenTelemetry.
+Usage telemetry systems fail when they accept incompatible contracts, process duplicates during spikes, or make recovery too manual after poison messages. UsagePulse addresses those failure modes directly by combining contract checks, tenant controls, resilient processing, dead-letter replay, and fast read models in one platform.

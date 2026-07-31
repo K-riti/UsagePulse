@@ -53,7 +53,7 @@ public sealed class UsageEventProcessor : IUsageEventProcessor
             logger.LogWarning("Rejected event {EventId}. ReasonCode={ReasonCode} ValidationCode={ValidationCode} Message={Message}", usageEvent.EventId, failure.ReasonCode, failure.ValidationCode, failure.Message);
             await deadLetterSink.PublishAsync(usageEvent, failure, cancellationToken);
             RecordMetric(usageEvent, "validation_failed", failure.ReasonCode);
-            return ProcessingResult.Failure(0, failure.ReasonCode, failure.Message, failure.ValidationCode);
+            return ProcessingResult.Failed(0, failure.ReasonCode, failure.Message, failure.ValidationCode);
         }
 
         if (!await deduplicationStage.TryStartAsync(usageEvent, cancellationToken))
@@ -83,7 +83,7 @@ public sealed class UsageEventProcessor : IUsageEventProcessor
             logger.LogError(ex, "Circuit open while processing event {EventId}.", usageEvent.EventId);
             await deadLetterSink.PublishAsync(usageEvent, failure, cancellationToken);
             RecordMetric(usageEvent, "circuit_open", failure.ReasonCode);
-            return ProcessingResult.Failure(attempts, failure.ReasonCode, failure.Message);
+            return ProcessingResult.Failed(attempts, failure.ReasonCode, failure.Message);
         }
         catch (Exception ex)
         {
@@ -91,7 +91,7 @@ public sealed class UsageEventProcessor : IUsageEventProcessor
             logger.LogError(ex, "Processing failed for event {EventId} after {Attempts} attempts.", usageEvent.EventId, attempts);
             await deadLetterSink.PublishAsync(usageEvent, failure, cancellationToken);
             RecordMetric(usageEvent, "failed", failure.ReasonCode);
-            return ProcessingResult.Failure(attempts, failure.ReasonCode, failure.Message);
+            return ProcessingResult.Failed(attempts, failure.ReasonCode, failure.Message);
         }
     }
 

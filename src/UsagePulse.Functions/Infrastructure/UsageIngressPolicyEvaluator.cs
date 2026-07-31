@@ -24,6 +24,18 @@ public sealed class UsageIngressPolicyEvaluator
                 ValidationErrorCode.UnsupportedSchemaVersion));
         }
 
+        if (settings.SchemaContracts.Count > 0)
+        {
+            var matchingContract = settings.SchemaContracts.FirstOrDefault(contract => contract.Matches(usageEvent.Source, usageEvent.Feature));
+            if (matchingContract is null || usageEvent.SchemaVersion < matchingContract.MinimumSchemaVersion || usageEvent.SchemaVersion > matchingContract.MaximumSchemaVersion)
+            {
+                return UsageIngressPolicyDecision.Reject(new ProcessingFailure(
+                    DeadLetterReasonCode.SchemaIncompatible,
+                    $"Schema contract not found or incompatible for source '{usageEvent.Source ?? "unknown"}' and feature '{usageEvent.Feature}'.",
+                    ValidationErrorCode.UnsupportedSchemaVersion));
+            }
+        }
+
         var policy = ResolvePolicy(usageEvent.TenantId);
         var window = tenantWindows.GetOrAdd(usageEvent.TenantId, _ => new TenantQuotaWindow());
         var units = Math.Max(1, usageEvent.Quantity);

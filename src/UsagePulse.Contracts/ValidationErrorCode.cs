@@ -8,5 +8,6 @@ public enum ValidationErrorCode
     InvalidQuantity = 4,
     InvalidOccurredAt = 5,
     UnsupportedSchemaVersion = 6,
-    QuotaExceeded = 7
+    QuotaExceeded = 7,
+    MissingUserId = 8
 }

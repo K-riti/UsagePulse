@@ -6,29 +6,25 @@ public sealed class UsageEventValidationStage : IUsageEventValidationStage
 {
     public ValidationOutcome Validate(UsageEvent usageEvent)
     {
-        if (string.IsNullOrWhiteSpace(usageEvent.EventId))
+        if (string.IsNullOrWhiteSpace(usageEvent.EventId.Value))
         {
             return ValidationOutcome.Invalid(ValidationErrorCode.MissingEventId, "EventId is required.");
         }
 
-        if (string.IsNullOrWhiteSpace(usageEvent.TenantId))
+        if (string.IsNullOrWhiteSpace(usageEvent.TenantId.Value))
         {
             return ValidationOutcome.Invalid(ValidationErrorCode.MissingTenantId, "TenantId is required.");
         }
 
-        if (string.IsNullOrWhiteSpace(usageEvent.Feature))
+        if (string.IsNullOrWhiteSpace(usageEvent.Feature.Value))
         {
             return ValidationOutcome.Invalid(ValidationErrorCode.MissingFeature, "Feature is required.");
         }
 
-        if (usageEvent.Quantity <= 0)
+        var contractFailure = UsageEventContractValidator.Validate(usageEvent);
+        if (contractFailure is not null)
         {
-            return ValidationOutcome.Invalid(ValidationErrorCode.InvalidQuantity, "Quantity must be greater than 0.");
-        }
-
-        if (usageEvent.OccurredAt == default)
-        {
-            return ValidationOutcome.Invalid(ValidationErrorCode.InvalidOccurredAt, "OccurredAt is required.");
+            return ValidationOutcome.Invalid(contractFailure.ValidationCode ?? ValidationErrorCode.InvalidQuantity, contractFailure.Message);
         }
 
         return ValidationOutcome.Valid();

@@ -53,7 +53,11 @@ public sealed class UsagePulseSettings
     [Range(1, 100)]
     public int MinimumCompatibleSchemaVersion { get; set; } = 1;
 
+    public string KeyVaultUri { get; set; } = string.Empty;
+
     public bool AllowConnectionStringFallback { get; set; }
+
+    public List<SchemaContractRuleSettings> SchemaContracts { get; set; } = [];
 
     [Required]
     public TenantQuotaPolicySettings DefaultTenantQuota { get; set; } = new();

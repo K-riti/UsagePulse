@@ -130,8 +130,9 @@ public sealed class KustoUsageAnalyticsSink : IUsageAnalyticsSink, IAsyncDisposa
             Format = DataSourceFormat.multijson
         };
 
-        var result = await ingestClient.IngestFromStreamAsync(stream, ingestionProperties, cancellationToken: cancellationToken);
-        logger.LogInformation("Queued {Count} usage events for Kusto ingestion. SourceId={SourceId}", batch.Count, result?.IngestionSourceId);
+        cancellationToken.ThrowIfCancellationRequested();
+        await ingestClient.IngestFromStreamAsync(stream, ingestionProperties);
+        logger.LogInformation("Queued {Count} usage events for Kusto ingestion.", batch.Count);
     }
 
     private async Task UpdateMaterializedViewsAsync(UsageEvent usageEvent, CancellationToken cancellationToken)

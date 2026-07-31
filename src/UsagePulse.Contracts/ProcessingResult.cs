@@ -10,6 +10,6 @@ public sealed record ProcessingResult(
 
     public static ProcessingResult Duplicate() => new(true, true, 0);
 
-    public static ProcessingResult Failure(int attempts, DeadLetterReasonCode reasonCode, string message, ValidationErrorCode? validationCode = null)
+    public static ProcessingResult Failed(int attempts, DeadLetterReasonCode reasonCode, string message, ValidationErrorCode? validationCode = null)
         => new(false, false, attempts, new ProcessingFailure(reasonCode, message, validationCode));
 }
