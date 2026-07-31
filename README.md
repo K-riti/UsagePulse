@@ -1,132 +1,125 @@
 # UsagePulse
 
-UsagePulse is a near real-time Azure usage telemetry platform for ingesting product events, enforcing contract safety, processing events reliably, exporting analytics, and serving tenant-facing usage summaries.
+UsagePulse is a .NET 8 reference implementation for near real-time usage event ingestion, resilient processing, and tenant-facing usage read models on Azure.
 
-## What the platform does
+The repository is intentionally documented around what is implemented today, not the full platform vision.
 
-UsagePulse is designed for teams that need trusted usage data for analytics, product intelligence, and billing-adjacent reporting. The platform focuses on four core guarantees:
+## Business outcomes
 
-- **Safe ingestion** with schema compatibility checks and tenant-aware throttling.
-- **Reliable processing** with validation, idempotency, retries, circuit breaking, and dead-letter handling.
-- **Fast analytics delivery** through Cosmos-backed summaries and batched Azure Data Explorer ingestion.
-- **Operational recovery** with a replay endpoint for dead-lettered events.
+UsagePulse is meant to improve four outcomes that matter to product and platform teams:
 
-## Current architecture
+- **Reliability:** reject malformed or incompatible events before they pollute downstream data.
+- **Recovery:** make poison-message handling and replay operationally manageable.
+- **Analytics accuracy:** keep hot summary views aligned with accepted events.
+- **Scalability foundation:** provide queue-based processing, batching, and tenant-aware throttling as a base for future growth.
 
-```text
-Event Hubs -> UsageIngestionFunction -> Service Bus work queue -> UsageProcessingFunction
-          -> ingress policy checks                         -> processing pipeline
-                                                           -> Cosmos DB raw event store
-                                                           -> Cosmos DB summary view store
-                                                           -> Azure Data Explorer batched ingest
-                                                           -> dead-letter queue + replay workflow
+## What is implemented today
 
-Query API -> Cosmos DB summaries/raw events -> tenant summary + realtime dashboard endpoints
-```
+### Ingestion and contract validation
 
-## Tech stack
-
-- .NET 8
-- Azure Functions isolated worker
-- Azure Event Hubs
-- Azure Service Bus
-- Azure Cosmos DB
-- Azure Data Explorer (Kusto)
-- OpenTelemetry + Azure Monitor / Application Insights
-- Terraform
-- Azure DevOps
-- AKS deployment manifests for the query API
-
-## Implemented capabilities
-
-### Ingestion and contract safety
-
-- Event ingestion from Event Hubs into Azure Functions.
-- Strict contract model with value objects:
-  - `EventId`
-  - `TenantId`
-  - `FeatureName`
-- Version-aware event contract through `UsageEvent.SchemaVersion` and `UsageEvent.Source`.
-- Ingress-time schema compatibility enforcement:
-  - minimum and current supported schema versions
-  - optional per-source and per-feature contract rules
-- Tenant quota enforcement with burst control before events enter the main processing queue.
-- Correlation propagation across asynchronous boundaries for distributed tracing.
+- Event Hub-triggered ingestion through `UsageIngestionFunction`.
+- Version-aware contract validation at ingestion time.
+  - Uses `SchemaVersion`, `Source`, and per-rule compatibility settings.
+  - This is **not** a separate schema registry product; it is in-process contract validation logic.
+- Tenant quota and burst checks before work is sent to the Service Bus processing queue.
+- Correlation propagation across queue boundaries.
 
 ### Processing pipeline
 
-- Thin trigger handlers with orchestration separated from business logic.
-- Pipeline-style processor with dedicated stages for:
+- Thin Functions triggers with orchestration separated from processing logic.
+- Pipeline-style event processor with stages for:
   - validation
   - deduplication
   - persistence
   - analytics export
   - finalization
-- Validation at the contract boundary for malformed or incomplete usage events.
-- Idempotency protection to prevent duplicate event processing.
-- Retry with exponential backoff.
-- Circuit breaker protection using Polly.
-- Strongly typed dead-letter reason codes and validation codes.
+- Validation failures are dead-lettered.
+- Duplicate events are skipped through idempotency checks.
+- Retry and circuit-breaker behavior is implemented with Polly.
+- Dead-letter reasons and validation codes are strongly typed.
 
-### Storage and analytics
+### Storage and read models
 
-- Raw usage event persistence in Cosmos DB.
-- Materialized summary view documents in Cosmos DB for hot dashboard windows.
-- Native Azure Data Explorer queued ingestion using the Kusto ingestion SDK.
-- Buffered batching for analytics export with configurable batch size and flush interval.
-- Summary windows currently maintained for:
+- Raw event persistence in Cosmos DB.
+- Hot summary documents in Cosmos DB for dashboard-style queries.
+- Summary windows implemented today:
   - `5m`
   - `1h`
   - `24h`
+- Realtime dashboard endpoint backed by those Cosmos summary documents.
 
-### Recovery and operations
+### Analytics export and recovery
 
-- Dead-letter publishing for invalid, incompatible, quota-exceeded, and failed events.
-- Replay HTTP function for dead-letter queue recovery with:
-  - max message limits
-  - tenant filter
-  - reason-code filter
+- Buffered Azure Data Explorer ingestion via the Kusto ingestion SDK.
+- Configurable batch size and flush interval.
+- Dead-letter replay endpoint with:
+  - `MaxMessages`
+  - tenant filtering
+  - reason-code filtering
   - dry-run mode
-- Managed Identity-first runtime configuration.
-- Azure Key Vault integration for configuration bootstrapping.
-- OpenTelemetry instrumentation for processing metrics and traces.
 
-### Query experience
+### Security and operations foundation
 
-- Tenant usage summary endpoint.
-- Realtime dashboard endpoint backed by materialized summary windows.
-- Swagger enabled in development for the query API.
+- Managed Identity-first configuration.
+- Optional Azure Key Vault bootstrap.
+- OpenTelemetry instrumentation hooks.
+- Architecture tests that protect current layering rules.
 
-## Solution layout
+## What is not implemented yet
 
-- `src/UsagePulse.Contracts`  
-  Shared contracts, typed identifiers, validation failures, and dashboard/summary response models.
-- `src/UsagePulse.Serialization`  
-  JSON serialization helpers for usage events and dead-letter envelopes.
-- `src/UsagePulse.Processing`  
-  Core processing abstractions, pipeline stages, telemetry, and resilience behavior.
-- `src/UsagePulse.Functions`  
-  Azure Functions host, ingestion/processing/replay functions, orchestrators, and infrastructure adapters.
-- `src/UsagePulse.QueryApi`  
-  Read API for summaries and realtime dashboard views.
-- `tests/UsagePulse.Processing.Tests`  
-  Unit tests for retries, dead-letter behavior, duplicates, and validation.
-- `tests/UsagePulse.Functions.Tests`  
-  Unit tests for ingress policy decisions and dead-letter envelope behavior.
-- `tests/UsagePulse.Architecture.Tests`  
-  Layering tests that guard contracts and processing boundaries.
-- `infra/terraform`  
-  Infrastructure as code for the Azure resource baseline.
-- `deploy/aks`  
-  Kubernetes manifest for the query API deployment.
-- `deploy/stream-analytics`  
-  Stream Analytics query template.
-- `azure-pipelines.yml`  
-  CI/CD pipeline definition.
+The following items should be treated as roadmap work, not current platform guarantees:
 
-## Event contract
+- A true external schema registry.
+- A standardized event envelope with explicit metadata/payload separation.
+- An outbox pattern between Cosmos DB persistence and ADX/Kusto export.
+- Fully separated hot and cold processing paths.
+- Published end-to-end load benchmarks with events/sec and P95 latency proof.
+- SLO-driven alert packs and automated remediation.
+- Anomaly detection.
+- Blue/green or progressive delivery.
+- A stricter `Domain -> Application -> Infrastructure -> Functions/API` architecture split.
 
-The central event contract is `UsageEvent`:
+## Current architecture
+
+```text
+Event Hubs
+  -> UsageIngestionFunction
+  -> ingress policy evaluation
+  -> Service Bus work queue
+  -> UsageProcessingFunction
+  -> processing pipeline
+     -> Cosmos DB raw event store
+     -> Cosmos DB summary view updates
+     -> buffered ADX/Kusto export
+     -> dead-letter queue on failure
+
+Query API
+  -> Cosmos DB summary views for dashboard windows
+  -> Cosmos DB raw events for broader summary queries
+```
+
+## Hot path vs cold path
+
+The repository already has the beginnings of hot/cold separation, but it is not fully decoupled yet.
+
+- **Hot path today:** Cosmos DB summary view documents are updated during event processing and serve the realtime dashboard endpoint.
+- **Cold path today:** the same processing flow also queues accepted events for batched ADX/Kusto ingestion.
+- **Important limitation:** both paths are still initiated from the same processing transaction flow, so there is no outbox yet to guarantee atomic handoff between persistence and analytics export.
+
+## Summary ownership
+
+Materialized summaries are updated **inline during event processing**, not by a separate aggregation job.
+
+Specifically:
+- the processing pipeline persists accepted usage events
+- the analytics sink updates Cosmos summary view documents for `5m`, `1h`, and `24h` windows
+- that same sink also batches events for ADX/Kusto ingestion
+
+This design keeps dashboards simple and low-latency, but it also means summary maintenance currently shares the event-processing path.
+
+## Event contract today
+
+The current event model is `UsageEvent`:
 
 - `EventId`
 - `TenantId`
@@ -138,7 +131,24 @@ The central event contract is `UsageEvent`:
 - `SchemaVersion`
 - `Source`
 
-This model is validated both structurally and operationally before deep processing begins.
+The repo also uses strict value objects for:
+- `EventId`
+- `TenantId`
+- `FeatureName`
+
+### Planned envelope evolution
+
+A future revision should move to a standardized envelope such as:
+
+- `correlationId`
+- `tenantId`
+- `schemaVersion`
+- `eventType`
+- `occurredAt`
+- `source`
+- `payload`
+
+That envelope is **planned**, not implemented in the current codebase.
 
 ## API surface
 
@@ -153,6 +163,135 @@ This model is validated both structurally and operationally before deep processi
 - Event Hub-triggered ingestion via `UsageIngestionFunction`
 - Service Bus-triggered processing via `UsageProcessingFunction`
 - HTTP replay endpoint via `POST /api/operations/dlq/replay`
+
+## Dashboard examples
+
+### Example dashboard metrics
+
+The realtime dashboard endpoint is intended to surface:
+
+- total event count for the selected window
+- total quantity for the selected window
+- feature-level usage breakdown
+- bucketed time-series points for trend charts
+
+### Example realtime dashboard response
+
+```json
+{
+  "tenantId": "tenant-a",
+  "from": "2026-01-10T10:00:00Z",
+  "to": "2026-01-10T11:00:00Z",
+  "eventCount": 128,
+  "totalQuantity": 742,
+  "featureBreakdown": {
+    "dashboard": 420,
+    "export": 210,
+    "alerts": 112
+  },
+  "points": [
+    {
+      "bucketStart": "2026-01-10T10:00:00Z",
+      "bucketEnd": "2026-01-10T10:05:00Z",
+      "eventCount": 11,
+      "totalQuantity": 57
+    },
+    {
+      "bucketStart": "2026-01-10T10:05:00Z",
+      "bucketEnd": "2026-01-10T10:10:00Z",
+      "eventCount": 14,
+      "totalQuantity": 61
+    }
+  ]
+}
+```
+
+### Example summary response
+
+```json
+{
+  "tenantId": "tenant-a",
+  "from": "2026-01-09T11:00:00Z",
+  "to": "2026-01-10T11:00:00Z",
+  "eventCount": 2210,
+  "totalQuantity": 13840,
+  "featureBreakdown": {
+    "dashboard": 6400,
+    "export": 5030,
+    "alerts": 2410
+  }
+}
+```
+
+## Performance and proof
+
+### Verified in this repository
+
+The following items are currently backed by code and automated validation in the repo:
+
+- solution builds successfully on .NET 8
+- processing, Functions, and architecture tests pass
+- retry, duplicate suppression, schema rejection, quota rejection, and dead-letter serialization are covered by tests
+- batched ADX/Kusto export is implemented with default settings of:
+  - `KustoBatchSize = 250`
+  - `KustoFlushIntervalSeconds = 5`
+- replay requests are capped by code to a maximum of `200` messages per call
+
+### Not yet published as proof
+
+This repository does **not** yet include a repeatable benchmark harness or production evidence for:
+
+- sustained events/sec
+- P95 or P99 ingestion latency
+- queue lag under load
+- end-to-end recovery time after downstream failures
+
+Until those measurements are added, the README intentionally avoids claiming production-scale throughput numbers.
+
+## Target SLOs
+
+The following targets are recommended and documented here as goals, not current guarantees:
+
+| Area | Target |
+| --- | --- |
+| API availability | 99.9% monthly |
+| Accepted event processing success rate | >= 99.95% |
+| Queue lag | < 60 seconds at steady state |
+| P95 ingestion-to-summary latency | < 30 seconds |
+| DLQ replay recovery for common operator cases | < 15 minutes |
+
+## Solution layout
+
+- `src/UsagePulse.Contracts`  
+  Shared contracts, typed identifiers, failures, and response models.
+- `src/UsagePulse.Serialization`  
+  JSON serialization helpers for usage events and dead-letter envelopes.
+- `src/UsagePulse.Processing`  
+  Processing abstractions, pipeline stages, telemetry, and resilience behavior.
+- `src/UsagePulse.Functions`  
+  Azure Functions host, orchestrators, triggers, replay endpoint, and infrastructure adapters.
+- `src/UsagePulse.QueryApi`  
+  Read API for summaries and realtime dashboard views.
+- `tests/UsagePulse.Processing.Tests`  
+  Unit tests for retries, dead-letter behavior, duplicates, and validation.
+- `tests/UsagePulse.Functions.Tests`  
+  Unit tests for ingress policy decisions and dead-letter envelope behavior.
+- `tests/UsagePulse.Architecture.Tests`  
+  Tests for current layering boundaries.
+
+## Architecture posture
+
+Current enforced boundaries are modest:
+
+- contracts must not reference upper layers
+- processing must not reference Functions or Query API adapters
+
+The intended next step is to evolve toward clearer `Domain -> Application -> Infrastructure -> Functions/API` boundaries. That stronger layering is planned work, not a completed claim.
+
+## Operations and decision records
+
+- Runbooks: `docs/runbooks/operations.md`
+- ADRs: `docs/adr/README.md`
 
 ## Configuration
 
@@ -225,6 +364,7 @@ dotnet build UsagePulse.slnx
 
 ```bash
 dotnet test UsagePulse.slnx
+dotnet test tests/UsagePulse.Functions.Tests/UsagePulse.Functions.Tests.csproj
 ```
 
 ### Run the Query API
@@ -243,20 +383,15 @@ dotnet run --project src/UsagePulse.QueryApi/UsagePulse.QueryApi.csproj
 func start --csharp
 ```
 
-## Operational focus areas
+## Roadmap
 
-The current implementation already includes foundational work for several high-value platform capabilities:
+Near-term priorities:
 
-- schema compatibility checks at ingestion
-- DLQ replay workflow
-- native Kusto ingestion with batching
-- tenant quotas and burst handling
-- low-latency dashboard windows
-- realtime dashboard API
-- managed identity and Key Vault-first configuration
-- architecture tests for layering
-
-Remaining platform work is mainly around deeper production hardening, richer alerting, anomaly detection, progressive delivery, and broader query-path optimizations.
+1. Add an outbox pattern between persistence and analytics export.
+2. Split hot dashboard updates from long-term analytics export more cleanly.
+3. Introduce a standardized event envelope.
+4. Add load benchmarks and publish events/sec and latency evidence.
+5. Add alerting, anomaly detection, and delivery safety controls.
 
 ## Infrastructure
 
@@ -273,17 +408,3 @@ terraform plan
 
 - `deploy/aks/usagepulse-queryapi.yaml`
 - `deploy/stream-analytics/usagepulse-job.asaql`
-
-## Testing strategy
-
-The repository currently contains:
-
-- processing unit tests
-- functions unit tests
-- architecture boundary tests
-
-These tests cover reliability-sensitive areas such as retries, duplicates, validation failures, schema rejection, quota enforcement, and basic layering rules.
-
-## Why UsagePulse matters
-
-Usage telemetry systems fail when they accept incompatible contracts, process duplicates during spikes, or make recovery too manual after poison messages. UsagePulse addresses those failure modes directly by combining contract checks, tenant controls, resilient processing, dead-letter replay, and fast read models in one platform.
