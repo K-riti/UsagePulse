@@ -44,6 +44,26 @@ public class UsageEventProcessorTests
         Assert.Single(deadLetter.Failures);
     }
 
+    [Fact]
+    public async Task ProcessAsync_RejectsInvalidEvent_WithoutCallingRepository()
+    {
+        var repository = new FakeUsageRepository();
+        var deadLetter = new FakeDeadLetterSink();
+        var invalidEvent = TestEvent() with { Quantity = 0 };
+        var processor = CreateProcessor(
+            new FakeIdempotencyStore(canStart: true),
+            repository: repository,
+            deadLetterSink: deadLetter);
+
+        var result = await processor.ProcessAsync(invalidEvent, CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(0, result.Attempts);
+        Assert.Equal(0, repository.StoreCalls);
+        Assert.Single(deadLetter.Failures);
+        Assert.Contains("Quantity", deadLetter.Failures[0]);
+    }
+
     private static UsageEventProcessor CreateProcessor(
         IIdempotencyStore idempotencyStore,
         IUsageEventRepository? repository = null,
@@ -90,8 +110,12 @@ public class UsageEventProcessorTests
             remainingFailures = failuresBeforeSuccess;
         }
 
+        public int StoreCalls { get; private set; }
+
         public Task StoreAsync(UsageEvent usageEvent, CancellationToken cancellationToken)
         {
+            StoreCalls++;
+
             if (remainingFailures > 0)
             {
                 remainingFailures--;

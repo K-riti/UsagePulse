@@ -38,7 +38,7 @@ public sealed class UsageSummaryService
             {
                 eventCount++;
                 totalQuantity += item.quantity;
-                featureBreakdown[item.feature] = featureBreakdown.GetValueOrDefault(item.feature) + 1;
+                featureBreakdown[item.feature] = featureBreakdown.GetValueOrDefault(item.feature) + item.quantity;
             }
         }
 

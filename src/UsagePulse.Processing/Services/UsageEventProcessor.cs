@@ -32,6 +32,13 @@ public sealed class UsageEventProcessor : IUsageEventProcessor
 
     public async Task<ProcessingResult> ProcessAsync(UsageEvent usageEvent, CancellationToken cancellationToken)
     {
+        if (!TryValidate(usageEvent, out var validationError))
+        {
+            logger.LogWarning("Rejected invalid usage event {EventId}: {Reason}", usageEvent.EventId, validationError);
+            await deadLetterSink.PublishAsync(usageEvent, validationError, cancellationToken);
+            return ProcessingResult.Failure(0, validationError);
+        }
+
         if (!await idempotencyStore.TryStartProcessingAsync(usageEvent.EventId, cancellationToken))
         {
             logger.LogInformation("Usage event {EventId} is already processed.", usageEvent.EventId);
@@ -63,5 +70,41 @@ public sealed class UsageEventProcessor : IUsageEventProcessor
         }
 
         return ProcessingResult.Failure(maxAttempts, "Processing failed.");
+    }
+
+    private static bool TryValidate(UsageEvent usageEvent, out string error)
+    {
+        if (string.IsNullOrWhiteSpace(usageEvent.EventId))
+        {
+            error = "EventId is required.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(usageEvent.TenantId))
+        {
+            error = "TenantId is required.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(usageEvent.Feature))
+        {
+            error = "Feature is required.";
+            return false;
+        }
+
+        if (usageEvent.Quantity <= 0)
+        {
+            error = "Quantity must be greater than 0.";
+            return false;
+        }
+
+        if (usageEvent.OccurredAt == default)
+        {
+            error = "OccurredAt is required.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
     }
 }
