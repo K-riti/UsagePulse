@@ -21,3 +21,7 @@ output "adx_cluster_uri" {
 output "aks_cluster_name" {
   value = azurerm_kubernetes_cluster.usagepulse.name
 }
+
+output "operations_action_group_id" {
+  value = azurerm_monitor_action_group.operations.id
+}

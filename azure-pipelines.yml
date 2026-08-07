@@ -3,13 +3,18 @@ trigger:
     include:
       - main
 
+pr:
+  branches:
+    include:
+      - main
+
 variables:
   buildConfiguration: Release
   terraformWorkingDirectory: infra/terraform
 
 stages:
 - stage: BuildAndTest
-  displayName: Build and Test
+  displayName: Build and test
   jobs:
   - job: DotNet
     pool:
@@ -26,8 +31,9 @@ stages:
     - script: dotnet test UsagePulse.slnx -c $(buildConfiguration) --no-build --collect "XPlat Code Coverage"
       displayName: Test
 
-- stage: InfrastructurePlan
-  displayName: Terraform Plan
+- stage: ValidateAndPlanInfra
+  displayName: Validate and plan infrastructure
+  dependsOn: BuildAndTest
   jobs:
   - job: Plan
     pool:
@@ -36,18 +42,47 @@ stages:
     - task: TerraformInstaller@1
       inputs:
         terraformVersion: 1.9.8
-    - script: terraform -chdir=$(terraformWorkingDirectory) init
-      displayName: Terraform Init
+    - script: terraform -chdir=$(terraformWorkingDirectory) init -backend=false
+      displayName: Terraform init
     - script: terraform -chdir=$(terraformWorkingDirectory) validate
-      displayName: Terraform Validate
+      displayName: Terraform validate
     - script: terraform -chdir=$(terraformWorkingDirectory) plan -out=tfplan
-      displayName: Terraform Plan
+      displayName: Terraform plan
+
+- stage: PerformanceBaseline
+  displayName: Performance baseline
+  dependsOn: BuildAndTest
+  condition: and(succeeded(), ne(variables['usagePulseBaseUrl'], ''))
+  jobs:
+  - job: K6Baseline
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - script: sudo apt-get update && sudo apt-get install -y gnupg2
+      displayName: Install prerequisites
+    - script: sudo gpg -k
+      displayName: Validate gpg availability
+    - script: sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+      displayName: Import k6 repository key
+    - script: echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+      displayName: Add k6 repository
+    - script: sudo apt-get update && sudo apt-get install -y k6
+      displayName: Install k6
+    - script: k6 run benchmarks/k6/usagepulse-ingestion.js --summary-export benchmarks/k6/results-summary.json
+      displayName: Run load baseline
+      env:
+        USAGEPULSE_BASE_URL: $(usagePulseBaseUrl)
+        USAGEPULSE_TENANT_ID: $(usagePulseTenantId)
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: benchmarks/k6/results-summary.json
+        ArtifactName: performance-baseline
+        publishLocation: Container
 
 - stage: Deploy
   displayName: Deploy to Azure
   dependsOn:
-  - BuildAndTest
-  - InfrastructurePlan
+  - ValidateAndPlanInfra
   condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
   jobs:
   - deployment: DeployUsagePulse
@@ -56,10 +91,42 @@ stages:
       runOnce:
         deploy:
           steps:
+          - checkout: self
           - task: TerraformInstaller@1
             inputs:
               terraformVersion: 1.9.8
-          - script: terraform -chdir=$(terraformWorkingDirectory) init
-            displayName: Terraform Init
-          - script: terraform -chdir=$(terraformWorkingDirectory) apply -auto-approve tfplan
-            displayName: Terraform Apply
+          - task: AzureCLI@2
+            displayName: Terraform apply
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                terraform -chdir=$(terraformWorkingDirectory) init
+                terraform -chdir=$(terraformWorkingDirectory) apply -auto-approve
+          - task: AzureCLI@2
+            displayName: Configure Stream Analytics query and bindings
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: pscore
+              scriptLocation: scriptPath
+              scriptPath: deploy/stream-analytics/deploy-stream-analytics.ps1
+              scriptArguments: >-
+                -ResourceGroupName $(resourceGroupName)
+                -JobName $(prefix)-asa
+                -EventHubNamespace $(prefix)-ehn
+                -EventHubName usage-events
+                -EventHubPolicyName RootManageSharedAccessKey
+                -EventHubPolicyKey $(eventHubPolicyKey)
+                -CosmosAccountName $(prefix)-cosmos
+                -CosmosDatabaseName usagepulse
+                -CosmosContainerName usage-stream-window
+                -CosmosAccountKey $(cosmosAccountKey)
+                -TransformationQueryPath deploy/stream-analytics/usagepulse-job.asaql
+          - task: KubernetesManifest@1
+            displayName: Deploy Query API to AKS
+            inputs:
+              action: deploy
+              kubernetesServiceConnection: $(aksServiceConnection)
+              manifests: deploy/aks/usagepulse-queryapi.yaml

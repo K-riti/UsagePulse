@@ -116,6 +116,15 @@ resource "azurerm_cosmosdb_sql_container" "usage_idempotency" {
   partition_key_version = 2
 }
 
+resource "azurerm_cosmosdb_sql_container" "usage_stream_window" {
+  name                  = "usage-stream-window"
+  resource_group_name   = azurerm_resource_group.usagepulse.name
+  account_name          = azurerm_cosmosdb_account.usagepulse.name
+  database_name         = azurerm_cosmosdb_sql_database.usagepulse.name
+  partition_key_path    = "/TenantId"
+  partition_key_version = 2
+}
+
 resource "azurerm_kusto_cluster" "usagepulse" {
   name                = "${var.prefix}-adx"
   location            = azurerm_resource_group.usagepulse.location

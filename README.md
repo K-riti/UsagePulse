@@ -52,17 +52,24 @@ UsagePulse is meant to improve four outcomes that matter to product and platform
 
 - Buffered Azure Data Explorer ingestion via the Kusto ingestion SDK.
 - Configurable batch size and flush interval.
+- Stream Analytics query asset plus deployment script that configures:
+  - Event Hubs input
+  - Cosmos DB output
+  - transformation query
+  - job start
 - Dead-letter replay endpoint with:
   - `MaxMessages`
   - tenant filtering
   - reason-code filtering
   - dry-run mode
 
-### Security and operations foundation
+### Security, observability, and operations foundation
 
 - Managed Identity-first configuration.
 - Optional Azure Key Vault bootstrap.
 - OpenTelemetry instrumentation hooks.
+- Application Insights and Log Analytics workspace provisioning via Terraform.
+- Azure Monitor alert action group and metric alerts for queue depth and ingress volume via Terraform.
 - Architecture tests that protect current layering rules.
 
 ## What is not implemented yet
@@ -73,8 +80,7 @@ The following items should be treated as roadmap work, not current platform guar
 - A standardized event envelope with explicit metadata/payload separation.
 - An outbox pattern between Cosmos DB persistence and ADX/Kusto export.
 - Fully separated hot and cold processing paths.
-- Published end-to-end load benchmarks with events/sec and P95 latency proof.
-- SLO-driven alert packs and automated remediation.
+- Automated remediation workflows for alerts.
 - Anomaly detection.
 - Blue/green or progressive delivery.
 - A stricter `Domain -> Application -> Infrastructure -> Functions/API` architecture split.
@@ -237,16 +243,16 @@ The following items are currently backed by code and automated validation in the
   - `KustoFlushIntervalSeconds = 5`
 - replay requests are capped by code to a maximum of `200` messages per call
 
-### Not yet published as proof
+### Benchmark harness and publication
 
-This repository does **not** yet include a repeatable benchmark harness or production evidence for:
+This repository now includes a repeatable benchmark harness and publication workflow:
 
-- sustained events/sec
-- P95 or P99 ingestion latency
-- queue lag under load
-- end-to-end recovery time after downstream failures
+- k6 load script in `benchmarks/k6/usagepulse-ingestion.js`
+- baseline guidance in `benchmarks/README.md`
+- published baseline template in `docs/performance/latest-baseline.md`
+- CI stage that runs the benchmark and publishes a summary artifact
 
-Until those measurements are added, the README intentionally avoids claiming production-scale throughput numbers.
+Production-scale claims should still be based on the latest measured values captured in `docs/performance/latest-baseline.md`.
 
 ## Target SLOs
 
@@ -390,8 +396,8 @@ Near-term priorities:
 1. Add an outbox pattern between persistence and analytics export.
 2. Split hot dashboard updates from long-term analytics export more cleanly.
 3. Introduce a standardized event envelope.
-4. Add load benchmarks and publish events/sec and latency evidence.
-5. Add alerting, anomaly detection, and delivery safety controls.
+4. Publish recurring baseline performance results from production-like traffic.
+5. Add anomaly detection and stronger delivery safety controls.
 
 ## Infrastructure
 
@@ -406,5 +412,24 @@ terraform plan
 
 ### Deployment assets
 
+- `azure-pipelines.yml` (Azure DevOps CI/CD: build, test, Terraform plan/apply, Stream Analytics setup, AKS deploy)
 - `deploy/aks/usagepulse-queryapi.yaml`
 - `deploy/stream-analytics/usagepulse-job.asaql`
+- `deploy/stream-analytics/deploy-stream-analytics.ps1`
+- `benchmarks/k6/usagepulse-ingestion.js`
+
+### Azure DevOps pipeline configuration
+
+Define these pipeline variables/service connections before enabling deploy stages:
+
+- `azureServiceConnection`
+- `aksServiceConnection`
+- `resourceGroupName`
+- `prefix`
+- `eventHubPolicyKey` (secret)
+- `cosmosAccountKey` (secret)
+
+Optional for performance baseline stage:
+
+- `usagePulseBaseUrl`
+- `usagePulseTenantId`

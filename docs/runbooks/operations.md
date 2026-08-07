@@ -6,7 +6,8 @@ This runbook covers the current operational surface that exists in the repositor
 
 - dead-letter handling
 - DLQ replay
-- basic incident triage
+- Azure Monitor and Application Insights alert triage
+- Stream Analytics pipeline checks
 - current limitations
 
 ## Dead-letter triage
@@ -104,9 +105,34 @@ Supported request fields:
 - Review batch settings: `KustoBatchSize`, `KustoFlushIntervalSeconds`.
 - Note that there is no outbox pattern yet, so recovery may require targeted replay.
 
+## Alert triage
+
+Terraform provisions the following starter alert rules:
+
+- Service Bus work queue depth (`ActiveMessages`)
+- Event Hubs ingress volume (`IncomingMessages`)
+
+When an alert fires:
+
+1. Validate whether it is a sustained signal over at least one full alert window.
+2. Check correlated traces and dependency failures in Application Insights.
+3. Confirm queue growth trend and processor throughput.
+4. Apply replay only after root cause is corrected.
+
+## Stream Analytics checks
+
+For the Stream Analytics job:
+
+- verify the job is running
+- verify `EventHubInput` and `CosmosAggregateOutput` are healthy
+- verify transformation query deployment matches `deploy/stream-analytics/usagepulse-job.asaql`
+
+If the job drifts, redeploy using:
+
+- `deploy/stream-analytics/deploy-stream-analytics.ps1`
+
 ## Current operational limitations
 
 - No outbox pattern currently guarantees atomic handoff from event persistence to analytics export.
 - Hot and cold paths are only partially separated.
-- No published end-to-end performance benchmark exists in the repository yet.
-- SLO alert automation is not implemented yet.
+- Automated remediation is not implemented yet.
